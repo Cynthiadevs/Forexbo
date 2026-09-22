@@ -1,0 +1,592 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRoleEnum {
+  SUPER_ADMIN
+  ADMIN
+  ANALYST
+  EDITOR
+  USER
+}
+
+enum SignalDirectionEnum {
+  BUY
+  SELL
+  WAIT
+}
+
+enum SignalStatusEnum {
+  GENERATED
+  PUBLISHED
+  ACTIVE
+  TP1_HIT
+  TP2_HIT
+  TP3_HIT
+  SL_HIT
+  BREAKEVEN
+  EXPIRED
+  CANCELLED
+}
+
+enum SignalStrengthEnum {
+  NO_TRADE
+  WEAK
+  MODERATE
+  STRONG
+  VERY_STRONG
+}
+
+enum NewsImpactEnum {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum DestinationTypeEnum {
+  CHANNEL
+  GROUP
+  SUPERGROUP
+  PRIVATE
+}
+
+enum ContentTypeEnum {
+  MARKET_OUTLOOK
+  FOREX_EDUCATION
+  TRADING_PSYCHOLOGY
+  ECONOMIC_NEWS
+  WEEKLY_RECAP
+  DAILY_RECAP
+  MARKET_SUMMARY
+}
+
+enum SubscriptionTierEnum {
+  FREE
+  PRO
+  VIP
+  ENTERPRISE
+}
+
+model User {
+  id               String            @id @default(uuid())
+  email            String            @unique
+  passwordHash     String
+  name             String
+  role             UserRoleEnum      @default(USER)
+  isActive         Boolean           @default(true)
+  avatarUrl        String?
+  lastLoginAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  subscriptions    UserSubscription[]
+  auditLogs        AuditLog[]
+  createdSignals   Signal[]          @relation("UserSignals")
+
+  @@index([email])
+  @@index([role])
+}
+
+model Role {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  description String?
+  permissions Permission[]
+  createdAt   DateTime     @default(now())
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  action      String   // e.g. "signals:create", "destinations:manage"
+  description String?
+  roles       Role[]
+  createdAt   DateTime @default(now())
+
+  @@unique([action])
+}
+
+model Plan {
+  id              String               @id @default(uuid())
+  name            String               @unique
+  tier            SubscriptionTierEnum @unique
+  priceMonthly    Float                @default(0.0)
+  priceYearly     Float                @default(0.0)
+  maxSignalsPerDay Int                 @default(3)
+  allowedPairs    String[]             // Array of pair symbols, or ["*"]
+  aiAnalysisAccess Boolean             @default(false)
+  backtestAccess   Boolean             @default(false)
+  telegramAlerts   Boolean             @default(true)
+  customAlerts     Boolean             @default(false)
+  isActive        Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  subscriptions   UserSubscription[]
+}
+
+model UserSubscription {
+  id          String               @id @default(uuid())
+  userId      String
+  planId      String
+  status      String               @default("ACTIVE") // ACTIVE, CANCELLED, EXPIRED
+  startDate   DateTime             @default(now())
+  endDate     DateTime?
+  autoRenew   Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan        Plan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([status])
+}
+
+model ForexPair {
+  id                String            @id @default(uuid())
+  symbol            String            @unique // e.g. EURUSD, XAUUSD
+  name              String            // e.g. Euro / US Dollar
+  category          String            @default("FOREX") // FOREX, METALS, INDICES
+  baseCurrency      String
+  quoteCurrency     String
+  pipDecimal        Int               @default(4)
+  minSpread         Float             @default(1.0)
+  isActive          Boolean           @default(true)
+  displayOrder      Int               @default(0)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  candles           MarketCandle[]
+  signals           Signal[]
+  indicatorSnapshots IndicatorSnapshot[]
+  marketAnalyses    MarketAnalysis[]
+  backtestTrades    BacktestTrade[]
+
+  @@index([symbol])
+  @@index([isActive])
+}
+
+model MarketCandle {
+  id          String    @id @default(uuid())
+  pairId      String
+  symbol      String
+  timeframe   String    // 1m, 5m, 15m, 30m, 1h, 4h, 1d
+  timestamp   DateTime
+  open        Float
+  high        Float
+  low         Float
+  close       Float
+  volume      Float     @default(0.0)
+  isCompleted Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  pair        ForexPair @relation(fields: [pairId], references: [id], onDelete: Cascade)
+
+  @@unique([symbol, timeframe, timestamp])
+  @@index([symbol, timeframe, timestamp(sort: Desc)])
+}
+
+model IndicatorSnapshot {
+  id              String    @id @default(uuid())
+  pairId          String
+  symbol          String
+  timeframe       String
+  timestamp       DateTime
+  ema20           Float
+  ema50           Float
+  ema200          Float
+  sma50           Float
+  sma200          Float
+  rsi             Float
+  macdLine        Float
+  macdSignal      Float
+  macdHistogram   Float
+  atr             Float
+  adx             Float
+  bbUpper         Float
+  bbMiddle        Float
+  bbLower         Float
+  stochK          Float
+  stochD          Float
+  pivot           Float
+  r1              Float
+  r2              Float
+  s1              Float
+  s2              Float
+  trend           String
+  volatility      String
+  createdAt       DateTime  @default(now())
+
+  pair            ForexPair @relation(fields: [pairId], references: [id], onDelete: Cascade)
+
+  @@index([symbol, timeframe, timestamp(sort: Desc)])
+}
+
+model MarketAnalysis {
+  id                String    @id @default(uuid())
+  pairId            String
+  symbol            String
+  timeframe         String
+  timestamp         DateTime
+  trend             String
+  structureTrend    String
+  nearestSupport    Float
+  nearestResistance Float
+  isBos             Boolean   @default(false)
+  isChoch           Boolean   @default(false)
+  multiTfAlignment  Int       @default(50) // 0 - 100
+  summaryJson       Json
+  createdAt         DateTime  @default(now())
+
+  pair              ForexPair @relation(fields: [pairId], references: [id], onDelete: Cascade)
+
+  @@index([symbol, timeframe, timestamp(sort: Desc)])
+}
+
+model Strategy {
+  id          String         @id @default(uuid())
+  name        String         @unique
+  slug        String         @unique
+  description String
+  isEnabled   Boolean        @default(true)
+  weightTrend Int            @default(20)
+  weightStructure Int        @default(20)
+  weightMomentum Int         @default(15)
+  weightSupportResistance Int @default(15)
+  weightEmaAlignment Int     @default(10)
+  weightRsiMacd Int          @default(10)
+  weightVolatility Int       @default(5)
+  weightNewsFilter Int       @default(5)
+  minScoreToQualify Int      @default(70)
+  configJson  Json?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  rules       StrategyRule[]
+  signals     Signal[]
+}
+
+model StrategyRule {
+  id          String   @id @default(uuid())
+  strategyId  String
+  name        String
+  ruleType    String   // ENTRY, FILTER, EXIT
+  condition   String
+  weight      Int      @default(10)
+  isEnabled   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  strategy    Strategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+
+  @@index([strategyId])
+}
+
+model Signal {
+  id                String              @id @default(uuid())
+  pairId            String
+  symbol            String
+  timeframe         String
+  direction         SignalDirectionEnum
+  status            SignalStatusEnum    @default(GENERATED)
+  entryPrice        Float
+  stopLoss          Float
+  takeProfit1       Float
+  takeProfit2       Float?
+  takeProfit3       Float?
+  riskRewardRatio1  Float
+  riskRewardRatio2  Float?
+  riskRewardRatio3  Float?
+  score             Int
+  scoreCategory     SignalStrengthEnum
+  sltpMethod        String              @default("ATR_DYNAMIC")
+  scoreBreakdown    Json
+  indicatorsSnapshot Json
+  marketStructure   Json
+  multiTimeframe    Json
+  isPublic          Boolean             @default(true)
+  createdById       String?
+  strategyId        String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  expiresAt         DateTime?
+  closedAt          DateTime?
+
+  pair              ForexPair           @relation(fields: [pairId], references: [id], onDelete: Cascade)
+  strategy          Strategy?           @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+  createdBy         User?               @relation("UserSignals", fields: [createdById], references: [id], onDelete: SetNull)
+  events            SignalEvent[]
+  result            SignalResult?
+  aiRequests        AIRequest[]
+  generatedImages   GeneratedImage[]
+  telegramPosts     TelegramPost[]
+
+  @@index([symbol, status])
+  @@index([createdAt(sort: Desc)])
+  @@index([status])
+}
+
+model SignalEvent {
+  id          String           @id @default(uuid())
+  signalId    String
+  status      SignalStatusEnum
+  priceAtEvent Float
+  notes       String?
+  createdAt   DateTime         @default(now())
+
+  signal      Signal           @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  @@index([signalId, createdAt])
+}
+
+model SignalResult {
+  id               String           @id @default(uuid())
+  signalId         String           @unique
+  outcome          SignalStatusEnum // TP1_HIT, TP2_HIT, TP3_HIT, SL_HIT, EXPIRED, CANCELLED
+  finalPrice       Float
+  pips             Float
+  profitPercentage Float
+  durationMinutes  Int              @default(0)
+  createdAt        DateTime         @default(now())
+
+  signal           Signal           @relation(fields: [signalId], references: [id], onDelete: Cascade)
+}
+
+model AIRequest {
+  id           String      @id @default(uuid())
+  signalId     String?
+  requestType  String      // SIGNAL_EXPLANATION, TELEGRAM_CAPTION, DAILY_REPORT, MARKET_ANALYSIS
+  model        String
+  promptText   String
+  promptTokens Int         @default(0)
+  status       String      @default("PENDING") // PENDING, SUCCESS, FAILED, FALLBACK
+  durationMs   Int         @default(0)
+  createdAt    DateTime    @default(now())
+
+  signal       Signal?     @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  response     AIResponse?
+
+  @@index([requestType, createdAt(sort: Desc)])
+}
+
+model AIResponse {
+  id               String    @id @default(uuid())
+  requestId        String    @unique
+  completionTokens Int       @default(0)
+  totalTokens      Int       @default(0)
+  estimatedCostUsd Float     @default(0.0)
+  rawResponse      String
+  structuredJson   Json?
+  createdAt        DateTime  @default(now())
+
+  request          AIRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
+
+model PromptTemplate {
+  id          String          @id @default(uuid())
+  type        String          @unique // SIGNAL_EXPLANATION, CAPTION, DAILY_REPORT, etc.
+  title       String
+  template    String
+  systemRole  String
+  version     Int             @default(1)
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  versions    PromptVersion[]
+}
+
+model PromptVersion {
+  id         String         @id @default(uuid())
+  templateId String
+  version    Int
+  template   String
+  systemRole String
+  notes      String?
+  createdAt  DateTime       @default(now())
+
+  parent     PromptTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, version])
+}
+
+model GeneratedImage {
+  id          String   @id @default(uuid())
+  signalId    String?
+  imageUrl    String
+  imagePath   String
+  format      String   @default("PNG")
+  width       Int      @default(1080)
+  height      Int      @default(1080)
+  fileSize    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  signal      Signal?  @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  @@index([signalId])
+}
+
+model TelegramDestination {
+  id                   String              @id @default(uuid())
+  name                 String
+  chatId               String              @unique
+  type                 DestinationTypeEnum @default(CHANNEL)
+  enabled              Boolean             @default(true)
+  signalsEnabled       Boolean             @default(true)
+  analysisEnabled      Boolean             @default(true)
+  newsEnabled          Boolean             @default(true)
+  dailyReportEnabled   Boolean             @default(true)
+  resultUpdatesEnabled Boolean             @default(true)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  posts                TelegramPost[]
+
+  @@index([chatId])
+}
+
+model TelegramPost {
+  id            String              @id @default(uuid())
+  destinationId String
+  signalId      String?
+  messageId     Int?
+  postType      String              // SIGNAL, RESULT_UPDATE, DAILY_REPORT, NEWS
+  caption       String
+  imageUrl      String?
+  status        String              @default("PENDING") // PENDING, SENT, FAILED
+  errorMessage  String?
+  retryCount    Int                 @default(0)
+  sentAt        DateTime?
+  createdAt     DateTime            @default(now())
+
+  destination   TelegramDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  signal        Signal?             @relation(fields: [signalId], references: [id], onDelete: SetNull)
+
+  @@index([destinationId, status])
+  @@index([signalId])
+}
+
+model TelegramBotUser {
+  id          String   @id @default(uuid())
+  telegramId  BigInt   @unique
+  username    String?
+  firstName   String?
+  lastName    String?
+  isSubscribed Boolean  @default(false)
+  tier        String   @default("FREE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([telegramId])
+}
+
+model NewsEvent {
+  id            String         @id @default(uuid())
+  currency      String         // EUR, USD, GBP, JPY, etc.
+  event         String         // e.g. US Non-Farm Payrolls
+  impact        NewsImpactEnum
+  scheduledTime DateTime
+  actual        String?
+  forecast      String?
+  previous      String?
+  createdAt     DateTime       @default(now())
+
+  @@index([currency, scheduledTime])
+  @@index([impact, scheduledTime])
+}
+
+model ScheduledContent {
+  id            String          @id @default(uuid())
+  contentType   ContentTypeEnum
+  title         String
+  cronSchedule  String          // e.g. "0 8 * * 1-5"
+  destinationId String?
+  isEnabled     Boolean         @default(true)
+  lastRunAt     DateTime?
+  nextRunAt     DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([isEnabled, nextRunAt])
+}
+
+model Backtest {
+  id                 String          @id @default(uuid())
+  name               String
+  symbol             String
+  timeframe          String
+  strategyId         String?
+  startDate          DateTime
+  endDate            DateTime
+  initialBalance     Float           @default(10000.0)
+  finalBalance       Float
+  netProfit          Float
+  netProfitPercent   Float
+  totalTrades        Int
+  winningTrades      Int
+  losingTrades       Int
+  winRate            Float
+  profitFactor       Float
+  maxDrawdownPips    Float
+  maxDrawdownPercent Float
+  averageRiskReward  Float
+  summaryJson        Json
+  createdAt          DateTime        @default(now())
+
+  trades             BacktestTrade[]
+
+  @@index([symbol, timeframe])
+}
+
+model BacktestTrade {
+  id               String              @id @default(uuid())
+  backtestId       String
+  pairId           String?
+  symbol           String
+  direction        SignalDirectionEnum
+  entryTime        DateTime
+  exitTime         DateTime
+  entryPrice       Float
+  exitPrice        Float
+  stopLoss         Float
+  takeProfit1      Float
+  takeProfit2      Float?
+  takeProfit3      Float?
+  outcome          String              // TP1, TP2, TP3, SL, EXPIRED
+  pips             Float
+  profitAmount     Float
+  profitPercentage Float
+  score            Int
+  createdAt        DateTime            @default(now())
+
+  backtest         Backtest            @relation(fields: [backtestId], references: [id], onDelete: Cascade)
+  pair             ForexPair?          @relation(fields: [pairId], references: [id], onDelete: SetNull)
+
+  @@index([backtestId])
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique // e.g. "RISK_MAX_SPREAD", "BRANDING_NAME"
+  value       String
+  description String?
+  category    String   @default("GENERAL") // GENERAL, RISK, BRANDING, AI, TELEGRAM
+  isSecret    Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String   // e.g. "USER_LOGIN", "SETTING_CHANGED", "SIGNAL_CANCELLED"
+  resource  String?
+  details   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt(sort: Desc)])
+}

@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: forex_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: forex_user
+      POSTGRES_PASSWORD: forex_password
+      POSTGRES_DB: forex_ai_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forex_user -d forex_ai_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & BullMQ Queue
+  redis:
+    image: redis:7-alpine
+    container_name: forex_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Core API Server
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: forex_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: "postgresql://forex_user:forex_password@postgres:5432/forex_ai_db?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      DEMO_MODE: "true"
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Background Workers (Market Scanner & Lifecycle Monitor)
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: forex_worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://forex_user:forex_password@postgres:5432/forex_ai_db?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      DEMO_MODE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Next.js Web Dashboard & Landing Page
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    container_name: forex_web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_URL: "http://api:4000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:

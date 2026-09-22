@@ -1,0 +1,16 @@
+FROM node:20-alpine AS base
+
+WORKDIR /app
+
+# Install dependencies
+COPY package*.json ./
+COPY packages/*/package*.json ./packages/
+COPY apps/*/package*.json ./apps/
+
+COPY . .
+
+RUN npm install
+
+EXPOSE 4000
+
+CMD ["npm", "run", "start:api"]

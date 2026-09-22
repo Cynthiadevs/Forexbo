@@ -1,0 +1,25 @@
+{
+  "name": "@forex/database",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "tsx src/seed.ts"
+  },
+  "dependencies": {
+    "@forex/config": "*",
+    "@forex/shared": "*",
+    "@prisma/client": "^5.10.2",
+    "bcryptjs": "^2.4.3"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "prisma": "^5.10.2",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}

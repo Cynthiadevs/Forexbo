@@ -1,0 +1,35 @@
+{
+  "name": "forex-ai-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Production-ready AI Forex Intelligence, Signal Generation & Telegram Automation Platform",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:web": "node ./node_modules/next/dist/bin/next dev apps/web -p 3000",
+    "build:web": "node ./node_modules/next/dist/bin/next build apps/web",
+    "start:web": "node ./node_modules/next/dist/bin/next start apps/web -p 3000",
+    "start:api": "node --experimental-strip-types apps/api/src/index.ts",
+    "start:worker": "node --experimental-strip-types apps/worker/src/index.ts",
+    "start:telegram": "node --experimental-strip-types apps/telegram/src/index.ts",
+    "test:e2e": "node --experimental-strip-types tests/e2e-simulation.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "dotenv": "^16.4.5",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@next/swc-wasm-nodejs": "^14.2.25"
+  }
+}
