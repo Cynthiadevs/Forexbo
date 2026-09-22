@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { AppConfig, SUPPORTED_PAIRS, DEFAULT_RISK_CONFIG } from '../../../packages/config/src/index.ts';
+import { AppConfig, SUPPORTED_PAIRS, DEFAULT_RISK_CONFIG, SettingsManager } from '../../../packages/config/src/index.ts';
 import { MarketDataService } from '../../../packages/market-engine/src/index.ts';
 import {
   QuantitativeSignalEngine,
@@ -33,6 +33,7 @@ import {
   UserRole
 } from '../../../packages/shared/src/index.ts';
 import { swaggerDocument } from './swagger.ts';
+import { getAdminHtml } from './admin-ui.ts';
 
 // Simple native HMAC-SHA256 JWT utility
 function signJWT(payload: any, secret: string, expiresInSeconds = 86400): string {
@@ -210,6 +211,7 @@ export class APIServer {
   private readonly riskEngine: RiskEngine;
   private readonly aiService: AIService;
   private readonly telegramPublisher: TelegramPublisher;
+  private readonly settingsManager: SettingsManager;
 
   constructor() {
     this.marketService = MarketDataService.getInstance();
@@ -217,6 +219,7 @@ export class APIServer {
     this.riskEngine = new RiskEngine(currentRiskConfig);
     this.aiService = AIService.getInstance();
     this.telegramPublisher = new TelegramPublisher();
+    this.settingsManager = SettingsManager.getInstance();
   }
 
   public async start(port = AppConfig.port || 4000): Promise<http.Server> {
@@ -274,11 +277,79 @@ export class APIServer {
       };
 
       const sendHTML = (statusCode: number, html: string) => {
-        res.writeHead(statusCode, { 'Content-Type': 'text/html' });
+        res.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html);
       };
 
       try {
+        // --- 1. ROOT & ADMIN WEB UI (REQUESTED BY USER) ---
+        if (method === 'GET' && (pathname === '/' || pathname === '/admin' || pathname === '/dashboard')) {
+          const settings = this.settingsManager.getSettings();
+          return sendHTML(200, getAdminHtml(settings.brandName));
+        }
+
+        // --- 2. SETTINGS & ENVIRONMENT MANAGEMENT (REQUESTED BY USER) ---
+        if (method === 'GET' && (pathname === '/api/settings' || pathname === '/system/settings')) {
+          return sendJSON(200, {
+            success: true,
+            data: this.settingsManager.getSettings()
+          });
+        }
+
+        if (method === 'PUT' && (pathname === '/api/settings' || pathname === '/system/settings')) {
+          const body = await parseBody();
+          const updated = this.settingsManager.updateSettings(body);
+          return sendJSON(200, {
+            success: true,
+            message: 'Environment and posting settings successfully updated live.',
+            data: updated
+          });
+        }
+
+        // --- 3. TEST TELEGRAM CONNECTION ---
+        if (method === 'POST' && (pathname === '/api/telegram/test' || pathname === '/telegram/test')) {
+          const settings = this.settingsManager.getSettings();
+          const token = settings.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+          const channel = settings.telegramChannelId || process.env.TELEGRAM_DEFAULT_CHANNEL_ID || '@AlphaQuantFX';
+
+          if (!token) {
+            return sendJSON(400, {
+              success: false,
+              error: 'No Telegram Bot Token configured. Please set your Telegram Bot Token in Site Settings.'
+            });
+          }
+
+          try {
+            const testMsg = `🤖 *${settings.brandName}* — Live Bot Test Alert\n\n✅ *Status:* Connection Established Successfully\n🕒 *Timestamp:* \`${new Date().toUTCString()}\`\n📈 *Market Feed:* \`${this.marketService.getStatus()}\`\n\n_Auto-publishing & AI signal engines are fully operational._`;
+            const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: channel,
+                text: testMsg,
+                parse_mode: 'Markdown'
+              })
+            });
+            const data = (await resp.json()) as any;
+            if (data.ok) {
+              return sendJSON(200, {
+                success: true,
+                message: `Test alert successfully delivered to ${channel} (Message ID: ${data.result.message_id})`
+              });
+            } else {
+              return sendJSON(400, {
+                success: false,
+                error: `Telegram API Error: ${data.description || 'Check bot token and ensure bot is admin in channel.'}`
+              });
+            }
+          } catch (err: any) {
+            return sendJSON(500, {
+              success: false,
+              error: `Telegram Connection Error: ${err.message}`
+            });
+          }
+        }
+
         // --- SSE REAL-TIME TICK STREAM ---
         if (method === 'GET' && (pathname === '/market/stream' || pathname === '/stream')) {
           res.writeHead(200, {
@@ -297,6 +368,7 @@ export class APIServer {
         if (method === 'GET' && (pathname === '/health' || pathname === '/system/health')) {
           const uptimeSec = Math.floor(process.uptime());
           const mem = process.memoryUsage();
+          const settings = this.settingsManager.getSettings();
           return sendJSON(200, {
             success: true,
             data: {
@@ -307,6 +379,10 @@ export class APIServer {
               marketDataStatus: this.marketService.getStatus(),
               activePairs: SUPPORTED_PAIRS.length,
               aiDailySpendUsd: this.aiService.getDailySpendUsd(),
+              autoPostingActive: settings.autoPostingEnabled,
+              postsSentToday: settings.postsSentToday,
+              maxDailyPosts: settings.maxDailyPosts,
+              targetChannel: settings.telegramChannelId,
               memory: {
                 rssMb: Math.round(mem.rss / 1024 / 1024),
                 heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
@@ -523,19 +599,42 @@ export class APIServer {
           const parts = pathname.split('/');
           const signalId = parts[2];
           const signal = signalsCache.find(s => s.id === signalId) || signalsCache[0];
-          const imageFile = await SignalCardRenderer.renderToFile(signal);
+          const settings = this.settingsManager.getSettings();
 
-          for (const dest of savedDestinations.filter(d => d.enabled)) {
-            await this.telegramPublisher.publishSignal(
-              dest,
-              signal,
-              signal.aiExplanation?.caption || `🔥 Signal for ${signal.symbol}`,
-              imageFile
-            );
+          let imageFile: string | undefined;
+          if (settings.includePhoto && settings.photoStyle !== 'TEXT_ONLY') {
+            imageFile = await SignalCardRenderer.renderToFile(signal);
+          }
+
+          const targetDestination: TelegramDestinationConfig = {
+            id: 'primary-vip',
+            name: settings.brandName + ' VIP Channel',
+            chatId: settings.telegramChannelId || AppConfig.telegram.defaultChannelId,
+            type: DestinationType.CHANNEL,
+            enabled: true,
+            signalsEnabled: true,
+            analysisEnabled: true,
+            newsEnabled: true,
+            dailyReportEnabled: true,
+            resultUpdatesEnabled: true
+          };
+
+          const publishRes = await this.telegramPublisher.publishSignal(
+            targetDestination,
+            signal,
+            signal.aiExplanation?.caption || `🔥 Signal for ${signal.symbol}`,
+            imageFile
+          );
+
+          if (publishRes.success) {
+            this.settingsManager.recordPostSent();
           }
 
           signal.status = SignalStatus.PUBLISHED;
-          return sendJSON(200, { success: true, message: 'Signal successfully broadcast to all active Telegram channels.' });
+          return sendJSON(200, {
+            success: true,
+            message: `Signal successfully broadcast to ${targetDestination.chatId} with branded vector graphic.`
+          });
         }
 
         // --- BACKTESTING ROUTES ---
@@ -704,6 +803,7 @@ export class APIServer {
     return new Promise((resolve) => {
       this.server!.listen(port, () => {
         console.log(`\n🚀 [REST API] Server running at http://localhost:${port}`);
+        console.log(`💻 [Admin Dashboard] Web interface available at http://localhost:${port}/`);
         console.log(`📖 [OpenAPI Docs] Interactive Swagger UI available at http://localhost:${port}/docs`);
         console.log(`⚡ [Real-time Stream] Server-Sent Events at http://localhost:${port}/market/stream\n`);
         resolve(this.server!);

@@ -1,4 +1,4 @@
-import { SUPPORTED_PAIRS, AppConfig } from '../../../packages/config/src/index.ts';
+import { SUPPORTED_PAIRS, AppConfig, SettingsManager } from '../../../packages/config/src/index.ts';
 import { MarketDataService } from '../../../packages/market-engine/src/index.ts';
 import { QuantitativeSignalEngine, RiskEngine } from '../../../packages/strategy-engine/src/index.ts';
 import { AIService } from '../../../packages/ai/src/index.ts';
@@ -48,6 +48,9 @@ export class MarketScannerWorker {
     try {
       console.log(`\n🔍 [Scanner] Scanning ${SUPPORTED_PAIRS.length} pairs across multi-timeframes...`);
 
+      const settingsMgr = SettingsManager.getInstance();
+      const settings = settingsMgr.getSettings();
+
       for (const pair of SUPPORTED_PAIRS) {
         try {
           const { candles: h4 } = await this.marketService.getCandles(pair.symbol, Timeframe.H4, 40);
@@ -57,8 +60,13 @@ export class MarketScannerWorker {
 
           const signal = this.signalEngine.evaluate(pair.symbol, Timeframe.M15, { h4, h1, m15, m5 });
 
-          if (signal.qualifies && signal.direction !== SignalDirection.WAIT) {
+          if (signal.qualifies && signal.direction !== SignalDirection.WAIT && signal.score >= settings.minScoreToPost) {
             console.log(`✨ [VALID SIGNAL DETECTED] ${pair.symbol} ${signal.direction} | Score: ${signal.score}/100 [${signal.scoreCategory}]`);
+
+            if (!settingsMgr.canPostToday()) {
+              console.log(`⏳ Auto-post limit reached or outside scheduled hours for today (${settings.postsSentToday}/${settings.maxDailyPosts}).`);
+              continue;
+            }
 
             // Risk Evaluation
             const tick = await this.marketService.getLatestTick(pair.symbol);
@@ -76,15 +84,18 @@ export class MarketScannerWorker {
             console.log(`🤖 Generating AI explanation & caption for ${pair.symbol}...`);
             const aiAnalysis = await this.aiService.explainSignal(signal);
 
-            // Step 2: Render Branded Graphic
-            console.log(`🎨 Rendering high-res signal image for ${pair.symbol}...`);
-            const imagePath = await SignalCardRenderer.renderToFile(signal);
+            // Step 2: Render Branded Graphic (if photo enabled)
+            let imagePath: string | undefined;
+            if (settings.includePhoto && settings.photoStyle !== 'TEXT_ONLY') {
+              console.log(`🎨 Rendering high-res signal image for ${pair.symbol}...`);
+              imagePath = await SignalCardRenderer.renderToFile(signal);
+            }
 
             // Step 3: Publish to Telegram
             const destination: TelegramDestinationConfig = {
               id: 'primary-vip',
               name: 'Alpha Quant VIP Channel',
-              chatId: AppConfig.telegram.defaultChannelId,
+              chatId: settings.telegramChannelId || AppConfig.telegram.defaultChannelId,
               type: DestinationType.CHANNEL,
               enabled: true,
               signalsEnabled: true,
@@ -94,7 +105,10 @@ export class MarketScannerWorker {
               resultUpdatesEnabled: true
             };
 
-            await this.telegramPublisher.publishSignal(destination, signal, aiAnalysis.caption, imagePath);
+            const publishRes = await this.telegramPublisher.publishSignal(destination, signal, aiAnalysis.caption, imagePath);
+            if (publishRes.success) {
+              settingsMgr.recordPostSent();
+            }
 
             // Step 4: Register in Lifecycle Monitor for continuous TP/SL tracking
             this.monitor.registerSignal(signal);

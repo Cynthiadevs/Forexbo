@@ -95,3 +95,6 @@ export const AppConfig = {
   branding: DEFAULT_BRANDING,
   risk: DEFAULT_RISK_CONFIG
 };
+
+export * from './settings-manager.ts';
+
