@@ -185,4 +185,8 @@ export class SignalLifecycleMonitor {
   public getActiveTrades(): MonitoredTrade[] {
     return Array.from(this.activeTrades.values());
   }
+
+  public stop(): void {
+    this.isRunning = false;
+  }
 }
